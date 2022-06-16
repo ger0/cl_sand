@@ -1,6 +1,6 @@
-__kernel void HelloWorld(__global char* data) {
-    int gid = get_global_id(0);
 
+__kernel void HelloWorld(__global int* data) {
+    int gid = get_global_id(0);
     data[0] = 'H';
     data[1] = 'e';
     data[2] = 'l';

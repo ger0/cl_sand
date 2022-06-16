@@ -10,8 +10,10 @@ using uint = unsigned;
 // pixels per particle
 //constexpr int SCALE = 4;
 constexpr struct {int x = 1; int y = 1;} SCALE;
-constexpr uint MAP_WIDTH   = 1600;
-constexpr uint MAP_HEIGHT  = 1600;
+constexpr uint MAP_WIDTH   = 800 * 2;
+constexpr uint MAP_HEIGHT  = 800 * 2;
+
+constexpr size_t cellNum = MAP_WIDTH * MAP_HEIGHT;
 
 constexpr uint SCREEN_WIDTH   = MAP_WIDTH * SCALE.x;
 constexpr uint SCREEN_HEIGHT  = MAP_HEIGHT * SCALE.y;
@@ -21,10 +23,12 @@ cl_program          program;
 cl_kernel           kernel;
 cl_command_queue    command_queue;
 
+cl_mem clBuffer[]  = {nullptr, nullptr};
+
 bool isRunning    = true;
 
 // ----------- data ------------
-enum Type {
+enum Type : int {
     EMPTY = 0,
     WALL  = 1,
     SAND  = 2,
@@ -63,7 +67,7 @@ void mapPutCell(int x, int y, Type cell) {
 #define checkCL(err) \
     if (err != CL_SUCCESS) { \
         fprintf(stderr, "OpenCL error on line %d %d\n", __LINE__, err); \
-        return -1; \
+        abort(); \
     } \
 
 int initCL() {
@@ -121,10 +125,28 @@ int initCL() {
     size_t src_len[1]       = { len };
     char const *src_data[1] = { buff };
 
-    program = clCreateProgramWithSource(context, 1, src_data, src_len, &err);
+    program = clCreateProgramWithSource(context, 1, src_data, src_len, nullptr);
+
+    // wypisywanie bledow kompilacji kernela
+    clBuildProgram(program, device_id_count, device_ids,
+                   nullptr, nullptr, nullptr);
+    {
+        size_t log_size;
+        clGetProgramBuildInfo(program, device_ids[0], CL_PROGRAM_BUILD_LOG,
+                              0, nullptr, &log_size);
+        char* log = new char[log_size];
+
+        clGetProgramBuildInfo(program, device_ids[0], CL_PROGRAM_BUILD_LOG,
+                              log_size, log, nullptr);
+
+        fprintf(stderr, "%.*s\n", (int)log_size, log);
+        delete[] log;
+    }
+
+    clBuffer[0] = clCreateBuffer(context, CL_MEM_READ_WRITE, cellNum, nullptr, &err);
     checkCL(err);
 
-    err = clBuildProgram(program, 1, device_ids, nullptr, nullptr, nullptr);
+    clBuffer[1] = clCreateBuffer(context, CL_MEM_READ_WRITE, cellNum, nullptr, &err);
     checkCL(err);
 
     kernel = clCreateKernel(program, "HelloWorld", &err);
@@ -133,32 +155,49 @@ int initCL() {
     cl_char *mem = (cl_char*)malloc(sizeof(cl_char) * 8); 
     printf("Before: %s\n", mem);
 
-    cl_mem mem_obj = nullptr;
-    mem_obj = clCreateBuffer(context, CL_MEM_READ_WRITE, 8 * sizeof(cl_char), nullptr, &err);
-    checkCL(err);
-
     command_queue = clCreateCommandQueueWithProperties(context, device_ids[0], nullptr, &err);
     checkCL(err);
 
-    err = clEnqueueWriteBuffer(command_queue, mem_obj, CL_TRUE, 0, 8 * sizeof(cl_char), mem, 0, nullptr, nullptr);
-    checkCL(err);
-
-    cl_uint arg_index = 0;
-    size_t arg_size = sizeof(cl_mem);
-
-    err = clSetKernelArg(kernel, arg_index, arg_size, (void*)&mem_obj);
-    checkCL(err);
-
-    constexpr size_t global_work_size[] = {8};
-    err = clEnqueueNDRangeKernel(command_queue, kernel, 1, nullptr, global_work_size, nullptr, 0, nullptr, nullptr);
-    checkCL(err);
-
-    err = clEnqueueReadBuffer(command_queue, mem_obj, CL_TRUE, 0, 8 * sizeof(cl_char), mem, 0, nullptr, nullptr);
-    checkCL(err);
-
-    printf("After %s\n", mem);
+    delete[] platform_ids;
+    delete[] device_ids;
+    delete[] buff;
 
     return 0;
+}
+
+cl_mem* cast() {
+    cl_mem* inBuff;
+    cl_mem* outBuff;
+
+    static bool swap = false;
+
+    inBuff  = swap ? &clBuffer[1] : &clBuffer[0];
+    outBuff = swap ? &clBuffer[0] : &clBuffer[1];
+    swap = not swap;
+
+    cl_uint err;
+
+    constexpr size_t global_work_size[] = {cellNum / (8 * 2), cellNum / (8 * 2)};
+    constexpr size_t local_work_size[]  = {8, 8};
+
+    cl_event event;
+    err = clEnqueueNDRangeKernel(command_queue, kernel, 1,
+        nullptr, global_work_size, local_work_size, 0, nullptr, &event);
+    checkCL(err);
+
+    clWaitForEvents(1, &event);
+    clFinish(command_queue);
+    return outBuff;
+}
+
+void mapParallelUpdate() {
+    clock_t timePoint = clock();
+    double deltaTime = 0.0;
+
+
+    timePoint = clock() - timePoint;
+    deltaTime = (double)timePoint / CLOCKS_PER_SEC;
+    printf("Delta: %f\n", deltaTime);
 }
 
 // sekwencyjnie
