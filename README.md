@@ -1,3 +1,2 @@
-# gasand
-Multiplayer sand falling game 
 # gasand-parallel
+Wykorzystanie OpenCL do zrównoleglenia obliczeń stanu mapy.
