@@ -29,7 +29,7 @@ cl_mem clBuffer[]  = {nullptr, nullptr};
 bool isRunning    = true;
 
 // ----------- data ------------
-enum Type : int {
+enum Type : uint8_t {
     EMPTY = 0,
     WALL  = 1,
     SAND  = 2,
@@ -45,8 +45,15 @@ struct {int x = 0; int y = 0;} mpos;
 Type brush_state = EMPTY;
 
 // map
-Type map[MAP_WIDTH * MAP_HEIGHT] = {
+Type map[cellNum] = {
     EMPTY
+};
+
+SDL_Rect mapRects[cellNum];
+constexpr SDL_Colour typeCol[] {
+    {0, 0, 0, 255},
+    {100, 100, 100, 255},
+    {255, 255, 50, 255}
 };
 
 inline Type *mapGet(int x, int y) {
@@ -178,6 +185,11 @@ cl_mem* cast() {
     outBuff = swap ? &clBuffer[0] : &clBuffer[1];
     swap = not swap;
 
+    cl_event event;
+    clEnqueueWriteBuffer(command_queue, *inBuff, CL_TRUE, 0,
+            sizeof(Type) * cellNum, map, 0, nullptr, &event);
+    clWaitForEvents(1, &event);
+
     cl_uint err;
 
     err = clSetKernelArg(kernel, 0, sizeof(cl_uint), &MAP_WIDTH); 
@@ -188,12 +200,11 @@ cl_mem* cast() {
     constexpr size_t global_work_size[] = {MAP_WIDTH / 2, MAP_HEIGHT / 2};
     constexpr size_t local_work_size[]  = {8, 8};
 
-    cl_event event;
     err = clEnqueueNDRangeKernel(command_queue, kernel, 2,
         nullptr, global_work_size, local_work_size, 0, nullptr, &event);
     checkCL(err);
-
     clWaitForEvents(1, &event);
+
     clFinish(command_queue);
     return outBuff;
 }
@@ -208,6 +219,9 @@ void mapParallelUpdate() {
 
     clEnqueueReadBuffer(command_queue, *buffOut, CL_TRUE, 0, 
             sizeof(Type) * cellNum, map, 0, nullptr, &event);
+
+    clWaitForEvents(1, &event);
+    clFinish(command_queue);
 
     timePoint = clock() - timePoint;
     deltaTime = (double)timePoint / CLOCKS_PER_SEC;
@@ -295,15 +309,12 @@ void renderMap(SDL_Window *window, SDL_Renderer *renderer) {
     SDL_RenderClear(renderer);
     for (int y = 0; y < MAP_HEIGHT; y++) {
         for (int x = 0; x < MAP_WIDTH; x++) {
-            SDL_Rect rect = {x * SCALE.x, y * SCALE.y, SCALE.x, SCALE.y};
-            SDL_Colour col;
-            // kolorki
-            switch (*mapGet(x, y)) {
-                case EMPTY: col = SDL_Colour{0, 0, 0, 255};         break;
-                case WALL:  col = SDL_Colour{100, 100, 100, 255};   break;
-                case SAND:  col = SDL_Colour{255, 255, 50, 255};    break;
-                case GAS:   col = SDL_Colour{50, 20, 100, 255};     break;
-            }
+            //SDL_Rect rect = {x * SCALE.x, y * SCALE.y, SCALE.x, SCALE.y};
+            // kolorkij
+            auto& cell = *mapGet(x, y);
+            if (cell == EMPTY) continue;
+            auto& rect = mapRects[x + y * MAP_WIDTH];
+            auto& col  = typeCol[*mapGet(x, y)];
             SDL_SetRenderDrawColor(renderer, col.r, col.g, col.b, col.a);
             SDL_RenderFillRect(renderer, &rect);
         }
@@ -354,6 +365,13 @@ void initMap() {
     for (uint x = 0; x < MAP_WIDTH; x++) {
         *mapGet(x, 0) = WALL;
         *mapGet(x, MAP_HEIGHT - 1) = WALL;
+    }
+    map[800 * 800 / 4] = SAND;
+
+    for (int y = 0; y < MAP_HEIGHT; y++) {
+        for (int x = 0; x < MAP_WIDTH; x++) {
+            mapRects[x + y * MAP_WIDTH] = {x * SCALE.x, y * SCALE.y, SCALE.x, SCALE.y};
+        }
     }
 }
 

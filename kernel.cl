@@ -5,11 +5,22 @@ enum Type {
 };
 
 kernel void updateState(const uint width, const uint height, global int* input, global int* output) {
-    uint off_x = get_global_id(0);
-    uint off_y = get_global_id(1);
+    uint off_x = get_global_id(0) * 2;
+    uint off_y = get_global_id(1) * 2;
 
-    uint loc_x = get_local_id(0);
-    uint loc_y = get_local_id(1);
-
-    output[(off_x * 8) + loc_x * 2 + ((off_y * 8) + loc_y * 2) * width] = SAND;
+    for (uint y = 0; y < 1; y++) {
+        for (uint x = 0; x < 1; x++) {
+            uint id = x + off_x + (off_y + y) * width;
+            switch (input[id]) {
+                case SAND:
+                output[id] = SAND; 
+                break;
+                case WALL:
+                output[id] = WALL; 
+                break;
+                default:
+                output[id] = EMPTY;
+            }
+        }
+    }
 }
