@@ -10,8 +10,9 @@ using uint = unsigned;
 // pixels per particle
 //constexpr int SCALE = 4;
 constexpr struct {int x = 1; int y = 1;} SCALE;
-constexpr uint MAP_WIDTH   = 800 * 2;
-constexpr uint MAP_HEIGHT  = 800 * 2;
+// podzielne przez 16
+constexpr uint MAP_WIDTH   = 16 << 6;
+constexpr uint MAP_HEIGHT  = 16 << 6;
 
 constexpr size_t cellNum = MAP_WIDTH * MAP_HEIGHT;
 
@@ -143,17 +144,20 @@ int initCL() {
         delete[] log;
     }
 
-    clBuffer[0] = clCreateBuffer(context, CL_MEM_READ_WRITE, cellNum, nullptr, &err);
+    kernel = clCreateKernel(program, "updateState", &err);
     checkCL(err);
 
-    clBuffer[1] = clCreateBuffer(context, CL_MEM_READ_WRITE, cellNum, nullptr, &err);
+    Type* tempMap = new Type[cellNum * 2];
+    memcpy(tempMap, map, cellNum * sizeof(Type));
+    memcpy(tempMap + cellNum, map, cellNum * sizeof(Type));
+
+    clBuffer[0] = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
+            sizeof(Type) * cellNum, tempMap, &err);
     checkCL(err);
 
-    kernel = clCreateKernel(program, "HelloWorld", &err);
+    clBuffer[1] = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
+            sizeof(Type) * cellNum, tempMap + cellNum, &err);
     checkCL(err);
-
-    cl_char *mem = (cl_char*)malloc(sizeof(cl_char) * 8); 
-    printf("Before: %s\n", mem);
 
     command_queue = clCreateCommandQueueWithProperties(context, device_ids[0], nullptr, &err);
     checkCL(err);
@@ -170,18 +174,22 @@ cl_mem* cast() {
     cl_mem* outBuff;
 
     static bool swap = false;
-
     inBuff  = swap ? &clBuffer[1] : &clBuffer[0];
     outBuff = swap ? &clBuffer[0] : &clBuffer[1];
     swap = not swap;
 
     cl_uint err;
 
-    constexpr size_t global_work_size[] = {cellNum / (8 * 2), cellNum / (8 * 2)};
+    err = clSetKernelArg(kernel, 0, sizeof(cl_uint), &MAP_WIDTH); 
+    err = clSetKernelArg(kernel, 1, sizeof(cl_uint), &MAP_HEIGHT); 
+    err = clSetKernelArg(kernel, 2, sizeof(cl_mem), inBuff); 
+    err = clSetKernelArg(kernel, 3, sizeof(cl_mem), outBuff); 
+
+    constexpr size_t global_work_size[] = {MAP_WIDTH / 2, MAP_HEIGHT / 2};
     constexpr size_t local_work_size[]  = {8, 8};
 
     cl_event event;
-    err = clEnqueueNDRangeKernel(command_queue, kernel, 1,
+    err = clEnqueueNDRangeKernel(command_queue, kernel, 2,
         nullptr, global_work_size, local_work_size, 0, nullptr, &event);
     checkCL(err);
 
@@ -190,10 +198,16 @@ cl_mem* cast() {
     return outBuff;
 }
 
+// równolegle
 void mapParallelUpdate() {
     clock_t timePoint = clock();
     double deltaTime = 0.0;
+    cl_event event;
 
+    cl_mem *buffOut = cast();
+
+    clEnqueueReadBuffer(command_queue, *buffOut, CL_TRUE, 0, 
+            sizeof(Type) * cellNum, map, 0, nullptr, &event);
 
     timePoint = clock() - timePoint;
     deltaTime = (double)timePoint / CLOCKS_PER_SEC;
@@ -248,12 +262,9 @@ void tryDrawing() {
 void handleEvents(SDL_Event *e) {
     while (SDL_PollEvent(e) > 0) {
         switch(e->type) {
-            case SDL_QUIT:
-            isRunning = false;
-            break;
+            case SDL_QUIT: isRunning = false; break;
 
-            case SDL_MOUSEBUTTONDOWN:
-            isMousePressed = true;
+            case SDL_MOUSEBUTTONDOWN: isMousePressed = true;
 
             case SDL_MOUSEMOTION:
             mpos.x = e->motion.x / SCALE.x;
@@ -262,15 +273,13 @@ void handleEvents(SDL_Event *e) {
             //printf("Mouse moved to (%d, %d)\n", mpos_x, mpos_y);
             break;
 
-            case SDL_MOUSEBUTTONUP:
-            isMousePressed = false;
-            break;
+            case SDL_MOUSEBUTTONUP: isMousePressed = false; break;
 
             case SDL_KEYDOWN:
-            //printf("Scancode: 0x%02X\n", e->key.keysym.scancode);
-            if (e->key.keysym.scancode == 0x1A) {
+            // printf("Scancode: 0x%02X\n", e->key.keysym.scancode);
+            if (e->key.keysym.scancode == SDL_SCANCODE_W) {
                 brushState = WALL;
-            } else if (e->key.keysym.scancode == 0x16) {
+            } else if (e->key.keysym.scancode == SDL_SCANCODE_S) {
                 brushState = SAND;
             } else {
                 brushState = EMPTY;
@@ -280,29 +289,21 @@ void handleEvents(SDL_Event *e) {
     }
 }
 
+// TODO: poprawic funkcje zeby nie bottleneckowala calego programu
 void renderMap(SDL_Window *window, SDL_Renderer *renderer) {
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     for (int y = 0; y < MAP_HEIGHT; y++) {
         for (int x = 0; x < MAP_WIDTH; x++) {
-            // drawing the cell
             SDL_Rect rect = {x * SCALE.x, y * SCALE.y, SCALE.x, SCALE.y};
             SDL_Colour col;
+            // kolorki
             switch (*mapGet(x, y)) {
-                case EMPTY:
-                    col = SDL_Colour{0, 0, 0, 255};
-                    break;
-                case WALL:
-                    col = SDL_Colour{100, 100, 100, 255};
-                    break;
-                case SAND:
-                    col = SDL_Colour{255, 255, 50, 255};
-                    break;
-                case GAS:
-                    col = SDL_Colour{50, 20, 100, 255};
-                    break;
+                case EMPTY: col = SDL_Colour{0, 0, 0, 255};         break;
+                case WALL:  col = SDL_Colour{100, 100, 100, 255};   break;
+                case SAND:  col = SDL_Colour{255, 255, 50, 255};    break;
+                case GAS:   col = SDL_Colour{50, 20, 100, 255};     break;
             }
-
             SDL_SetRenderDrawColor(renderer, col.r, col.g, col.b, col.a);
             SDL_RenderFillRect(renderer, &rect);
         }
@@ -344,10 +345,23 @@ struct Scope_Handle {
    T* operator->()  const { return ptr; }
 };
 
+// sciany na obrzezach
+void initMap() {
+    for (uint y = 0; y < MAP_HEIGHT; y++) {
+        *mapGet(0, y) = WALL;
+        *mapGet(MAP_WIDTH - 1, y) = WALL;
+    }
+    for (uint x = 0; x < MAP_WIDTH; x++) {
+        *mapGet(x, 0) = WALL;
+        *mapGet(x, MAP_HEIGHT - 1) = WALL;
+    }
+}
+
 int main() {
     srand(time(NULL));
-    initCL();
 
+    initMap();
+    initCL();
     Scope_Handle<SDL_Window,   SDL_DestroyWindow>   window;
     Scope_Handle<SDL_Renderer, SDL_DestroyRenderer> renderer;
 
@@ -379,7 +393,8 @@ int main() {
     while (isRunning) {
         handleEvents(&event);
         tryDrawing();
-        mapStateUpdate();
+        mapParallelUpdate();
+        //mapStateUpdate();
         renderMap(window, renderer);
         //SDL_Delay(16);
     }
