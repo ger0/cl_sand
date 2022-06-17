@@ -3,16 +3,13 @@
 #include <ctime>
 #include <cassert>
 #include <CL/cl.h>
+#include "vars.h"
 
 typedef unsigned char byte;
 using uint = unsigned;
 
 // pixels per particle
-//constexpr int SCALE = 4;
 constexpr struct {int x = 1; int y = 1;} SCALE;
-// podzielne przez 16
-constexpr uint MAP_WIDTH   = 16 << 6;
-constexpr uint MAP_HEIGHT  = 16 << 6;
 
 constexpr size_t cellNum = MAP_WIDTH * MAP_HEIGHT;
 
@@ -41,14 +38,10 @@ Type brushState = EMPTY;
 bool isMousePressed  = false;
 struct {int x = 0; int y = 0;} mpos;
 
-// -----------------------------
-Type brush_state = EMPTY;
-
-// map
+// map do structa
 Type map[cellNum] = {
     EMPTY
 };
-
 SDL_Rect mapRects[cellNum];
 constexpr SDL_Colour typeCol[] {
     {0, 0, 0, 255},
@@ -135,9 +128,9 @@ int initCL() {
 
     program = clCreateProgramWithSource(context, 1, src_data, src_len, nullptr);
 
-    // wypisywanie bledow kompilacji kernela
     clBuildProgram(program, device_id_count, device_ids,
                    nullptr, nullptr, nullptr);
+    // wypisywanie bledow kompilacji kernela
     {
         size_t log_size;
         clGetProgramBuildInfo(program, device_ids[0], CL_PROGRAM_BUILD_LOG,
@@ -192,16 +185,18 @@ cl_mem* cast() {
 
     cl_uint err;
 
-    err = clSetKernelArg(kernel, 0, sizeof(cl_uint), &MAP_WIDTH); 
-    err = clSetKernelArg(kernel, 1, sizeof(cl_uint), &MAP_HEIGHT); 
-    err = clSetKernelArg(kernel, 2, sizeof(cl_mem), inBuff); 
-    err = clSetKernelArg(kernel, 3, sizeof(cl_mem), outBuff); 
+    uint8_t offset = swap ? 0 : 1;
+
+    err = clSetKernelArg(kernel, 0, sizeof(cl_mem), inBuff); 
+    err = clSetKernelArg(kernel, 1, sizeof(cl_mem), outBuff); 
+    err = clSetKernelArg(kernel, 2, sizeof(offset), &offset); 
 
     constexpr size_t global_work_size[] = {MAP_WIDTH / 2, MAP_HEIGHT / 2};
     constexpr size_t local_work_size[]  = {8, 8};
 
     err = clEnqueueNDRangeKernel(command_queue, kernel, 2,
         nullptr, global_work_size, local_work_size, 0, nullptr, &event);
+
     checkCL(err);
     clWaitForEvents(1, &event);
 
@@ -264,9 +259,12 @@ void mapStateUpdate() {
 }
 
 void tryDrawing() {
+    static uint size = 2;
+    if (not (mpos.x > 0 && mpos.x < MAP_WIDTH - (size + 1)
+        &&   mpos.y > 0 && mpos.y < MAP_HEIGHT - (size + 1))) return;
     if (isMousePressed) {
-        for (int x = mpos.x - 1; x <= mpos.x; x++) {
-            for (int y = mpos.y - 1; y <= mpos.y; y++) {
+        for (int x = mpos.x; x < mpos.x + size; x++) {
+            for (int y = mpos.y; y < mpos.y + size; y++) {
                 mapPutCell(x, y, brushState);
             }
         }
